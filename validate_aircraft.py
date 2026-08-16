@@ -1,7 +1,7 @@
 """Aircraft performance validation: OpenMDAO sizer vs published data.
 
-Outputs 3-column comparison tables (Computed | Published | % Diff with ±)
-for the DHC-415 and AT-802F, including per-phase fuel burn rates.
+Pass-through inputs (hardcoded presets) are listed separately.
+Validation tables show ONLY computed outputs vs published values.
 
 Published sources:
   DHC-515: De Havilland Canada official specs (dehavilland.com)
@@ -16,7 +16,7 @@ Published sources:
     - Patrol fuel burn: 71 GPH = 215 kg/h (802u.com at 180 kt, 10,000 ft)
     - FuelBoss: 75 GPH = 227 kg/h (PT6A-67F variant)
     - Cruise speed: 166 kt at 8,000 ft (PlanePhD best cruise)
-    - Stall speed: 79 kt at MTOW, MTOW: 7,257 kg
+    - Stall speed: 79 kt at MTOW
 
   PW123AF BSFC: 0.286 kg/kWh (Wikipedia, PW100 engine family)
   PT6A-67AG BSFC: ~0.363 kg/kWh (PT6A family, typical)
@@ -44,106 +44,125 @@ def fmt_row(name, comp, pub, unit=""):
     sign = "+" if pd >= 0 else ""
     comp_s = f"{comp:.1f}{unit}" if isinstance(comp, float) else f"{comp}{unit}"
     pub_s = f"{pub:.1f}{unit}" if isinstance(pub, float) else f"{pub}{unit}"
-    return f"  {name:<32} {comp_s:>14} {pub_s:>14}   {sign}{pd:>6.1f}%"
+    return f"  {name:<36} {comp_s:>14} {pub_s:>14}   {sign}{pd:>6.1f}%"
 
 
 def print_table(title, rows):
     print()
-    print("=" * 78)
+    print("=" * 82)
     print(f"  {title}")
-    print("=" * 78)
-    print(f"  {'Metric':<32} {'Computed':>14} {'Published':>14}   {'% Diff':>8}")
-    print(f"  {'-'*32} {'-'*14} {'-'*14}   {'-'*8}")
+    print("=" * 82)
+    print(f"  {'Metric':<36} {'Computed':>14} {'Published':>14}   {'% Diff':>8}")
+    print(f"  {'-'*36} {'-'*14} {'-'*14}   {'-'*8}")
     for row in rows:
         print(fmt_row(*row))
-    print("=" * 78)
+    print("=" * 82)
+
+
+def print_inputs(title, rows):
+    print()
+    print("=" * 70)
+    print(f"  {title}")
+    print("=" * 70)
+    print(f"  {'Parameter':<36} {'Value':>14}   {'Source':>12}")
+    print(f"  {'-'*36} {'-'*14}   {'-'*12}")
+    for name, val, source in rows:
+        val_s = f"{val:.2f}" if isinstance(val, float) else f"{val}"
+        print(f"  {name:<36} {val_s:>14}   {source:>12}")
+    print("=" * 70)
+    print(f"  (These are NOT computed — they are inputs to the model.)")
+    print()
 
 
 # ──────────────────────────────────────────────
-# DHC-415 (CL-415) — using DHC-515 official published data
+# DHC-415 (CL-415)
 # ──────────────────────────────────────────────
 
+print("\n" + "#" * 82)
+print("#  DHC-415 (CL-415)")
+print("#" * 82)
+
+# ── Pass-through inputs ──
+cl415_inputs = [
+    ("MTOW (kg)",                    19890,    "Preset"),
+    ("OEW (kg)",                     12880,    "Preset"),
+    ("Wingspan (m)",                 28.38,    "Preset"),
+    ("Wing area (m²)",              100.0,     "Preset"),
+    ("CL_max",                       2.19,     "Preset"),
+    ("CD0",                          0.0414,   "Preset"),
+    ("k (induced drag)",             0.0507,   "Preset"),
+    ("BSFC (kg/kWh)",                0.286,    "Wikipedia"),
+    ("Propeller efficiency",         0.82,     "Preset"),
+    ("Power per engine (kW)",        1775,      "Preset"),
+    ("Number of engines",            2,         "Preset"),
+    ("Fuel capacity (kg)",           4650,      "Preset"),
+    ("Cruise altitude (m)",          1500,      "Preset"),
+]
+print_inputs("Pass-Through Inputs (NOT computed by the model)", cl415_inputs)
+
+# ── Computed outputs ──
 sizer = DefaultAircraftSizer(preset="cl415")
 r = sizer.size()
 
-# Stall speed at MLW 16,780 kg, sea level
-V_stall_cl = math.sqrt(2 * 16780 * G / (1.225 * 100.0 * 2.19))
+# Derived values
+V_stall_cl = math.sqrt(2 * 16780 * G / (1.225 * 100.0 * 2.19))  # stall speed
 
-# Published: De Havilland Canada official DHC-515 specs
-# Average fuel consumption at long range cruise = 597 kg/h at 140 kt
-# This is the only per-phase fuel number published. We compute cruise fuel
-# at our optimal cruise speed (max L/D for turboprop) and compare.
-
-cruise_fc = r["propulsion_input"]["cruise_fc"]       # kg/s, computed
-cruise_speed = r["profile_parameters"]["cruise_speed"] # m/s, computed
-loiter_fc = r["propulsion_input"]["loiter_fc"]
-
-# For comparison: compute fuel burn at the PUBLISHED cruise speed (180 kt = 92.5 m/s)
-# at the published cruise altitude (1500 m)
+# Fuel at published LRC speed (140 kt = 72.2 m/s)
 rho_1500 = 1.225 * (288.15 - 0.0065 * 1500)**4.256 / 288.15**4.256
-V_pub_cruise = 92.5  # 180 kt in m/s
 W_cl = 19890 * G
-q_pub = 0.5 * rho_1500 * V_pub_cruise**2
-CL_pub = W_cl / (q_pub * 100.0)
-CD_pub = 0.0414 + 0.0507 * CL_pub**2
-D_pub = q_pub * 100.0 * CD_pub
-BSFC_cl = 0.286 / 3600  # kg/(kW·s)
-eta_cl = 0.82
-cruise_ff_at_pub_speed = BSFC_cl * D_pub * V_pub_cruise / (eta_cl * 1000) * 3600  # kg/h
-
-# Also compute fuel at the published long range cruise speed (140 kt = 72.2 m/s)
 V_lrc = 72.2  # 140 kt
 q_lrc = 0.5 * rho_1500 * V_lrc**2
 CL_lrc = W_cl / (q_lrc * 100.0)
 CD_lrc = 0.0414 + 0.0507 * CL_lrc**2
 D_lrc = q_lrc * 100.0 * CD_lrc
+BSFC_cl = 0.286 / 3600
+eta_cl = 0.82
 lrc_ff = BSFC_cl * D_lrc * V_lrc / (eta_cl * 1000) * 3600  # kg/h
 
-# Published ferry range: 2,333 km with 4,626 kg fuel at LRC speed
-# Computed ferry range at LRC speed
-ferry_range_computed = (4650 / (lrc_ff / 3600)) * V_lrc / 1000  # km
+# Fuel at published normal cruise (180 kt = 92.5 m/s)
+V_nc = 92.5
+q_nc = 0.5 * rho_1500 * V_nc**2
+CL_nc = W_cl / (q_nc * 100.0)
+CD_nc = 0.0414 + 0.0507 * CL_nc**2
+D_nc = q_nc * 100.0 * CD_nc
+nc_ff = BSFC_cl * D_nc * V_nc / (eta_cl * 1000) * 3600  # kg/h
 
-# ── Performance metrics ──
-cl415_perf_rows = [
-    ("MTOW (kg)",            r["mtom"],                                    19890,  ""),
-    ("OEW (kg)",             r["empty_mass"],                              12995,  ""),
-    ("Wingspan (m)",         r["span"],                                    28.6,   ""),
-    ("Wing area (m²)",       100.0,                                        100.34, ""),
-    ("Stall speed (kt)",     V_stall_cl * 1.94384,                         68,     ""),
-    ("Max cruise speed (kt)", 194,                                          187,    ""),
-    ("Normal cruise speed (kt)", round(V_pub_cruise * 1.94384),            180,    ""),
-    ("Long range cruise (kt)", round(r["_performance"]["optimal_cruise_kt"]), 140,  ""),
-    ("Ferry range (km)",     ferry_range_computed,                          2333,   ""),
-    ("Fuel capacity (kg)",   r["propulsion_input"]["total_propellant"],    4626,   ""),
-    ("Max L/D",              r["_performance"]["max_LD"],                   10.9,   ""),
+# Ferry range at LRC
+ferry_range = (4650 / (lrc_ff / 3600)) * V_lrc / 1000  # km
+
+# Max endurance at loiter
+loiter_fc = r["propulsion_input"]["loiter_fc"]
+endurance = 4650 / loiter_fc / 3600  # hours
+
+# Published: De Havilland DHC-515
+cl415_computed = [
+    ("Stall speed (kt)",            V_stall_cl * 1.94384,                   68,     ""),
+    ("Max L/D",                      r["_performance"]["max_LD"],            10.9,   ""),
+    ("LRC fuel burn (kg/h)",         lrc_ff,                                 597.0,  ""),
+    ("Normal cruise fuel (kg/h)",    nc_ff,                                  597.0,  ""),  # DH publishes only LRC number
+    ("Ferry range (km)",             ferry_range,                            2333,   ""),
+    ("Max endurance (h)",            endurance,                              6.3,    ""),
+    ("Optimal cruise speed (kt)",    r["_performance"]["optimal_cruise_kt"], 140,    ""),
+    ("Optimal loiter speed (kt)",    r["_performance"]["optimal_loiter_kt"],  None,   ""),  # no published loiter speed
 ]
-print_table("DHC-415 — Performance (Published: De Havilland DHC-515 specs)", cl415_perf_rows)
-
-# ── Per-phase fuel burn rates ──
-# Only published fuel number: 597 kg/h average at long range cruise (140 kt)
-# We compare our computed cruise fuel at two conditions:
-#   1) At our optimal cruise speed (max L/D, most efficient)
-#   2) At the published cruise speed (180 kt = 92.5 m/s)
-#   3) At the published LRC speed (140 kt = 72.2 m/s) ← matches 597 kg/h
-
-cl415_fuel_rows = [
-    ("Cruise @ optimal L/D (kg/h)",  cruise_fc * 3600,                     597.0,  ""),
-    ("Cruise @ 180 kt (kg/h)",       cruise_ff_at_pub_speed,                597.0,  ""),
-    ("Cruise @ 140 kt LRC (kg/h)",   lrc_ff,                                 597.0,  ""),
-    ("Loiter (kg/h)",                loiter_fc * 3600,                       597.0 * 0.6, ""),  # est: loiter ~60% of LRC
-]
-print_table("DHC-415 — Fuel Burn Rates (Published: 597 kg/h avg at LRC)", cl415_fuel_rows)
+# Filter out None published values
+cl415_computed = [row for row in cl415_computed if row[2] is not None]
+print_table("Computed Outputs vs Published (De Havilland DHC-515 official)", cl415_computed)
 
 print(f"\n  Note: De Havilland publishes a single average fuel consumption")
-print(f"  figure (597 kg/h at long range cruise). Per-phase breakdown is")
-print(f"  not publicly available. Our LRC computation ({lrc_ff:.0f} kg/h at")
-print(f"  140 kt) is the directly comparable number.")
+print(f"  figure (597 kg/h at long range cruise). No per-phase breakdown")
+print(f"  is publicly available. The LRC row is the direct comparison.")
 
 
 # ──────────────────────────────────────────────
 # Air Tractor AT-802F
 # ──────────────────────────────────────────────
 
+print("\n\n" + "#" * 82)
+print("#  Air Tractor AT-802F")
+print("#" * 82)
+
+# ── Pass-through inputs ──
 W_at = 7257 * G
 V_stall_at = 79 * 0.514444
 CL_max_at = 2 * W_at / (1.225 * 37.25 * V_stall_at**2)
@@ -152,40 +171,45 @@ k_at = 1 / (math.pi * 0.75 * AR_at)
 rho_8000 = 1.225 * (288.15 - 0.0065 * 2438)**4.256 / 288.15**4.256
 
 # Back-calculate CD0 from published cruise fuel burn: 78 GPH at 166 kt
-# 78 gal/h * 3.785 L/gal * 0.8 kg/L = 236.2 kg/h
-V_cruise_at = 166 * 0.514444  # 85.4 m/s
+V_cruise_at = 166 * 0.514444
 fuel_rate_cruise_pub = 236.2 / 3600  # kg/s
 BSFC_at = 0.363 / 3600
 eta_at = 0.80
-
 D_cruise_at = fuel_rate_cruise_pub * 1000 * eta_at / (BSFC_at * V_cruise_at)
 q_cruise_at = 0.5 * rho_8000 * V_cruise_at**2
 CL_cruise_at = W_at / (q_cruise_at * 37.25)
 CD_cruise_at = D_cruise_at / (q_cruise_at * 37.25)
 CD0_at = CD_cruise_at - k_at * CL_cruise_at**2
 
+at802_inputs = [
+    ("MTOW (kg)",                    7257,     "Air Tractor"),
+    ("OEW (kg)",                     3062,     "Air Tractor"),
+    ("Wingspan (m)",                 18.04,    "Air Tractor"),
+    ("Wing area (m²)",              37.25,     "Air Tractor"),
+    ("CL_max (derived from stall)", round(CL_max_at, 2),  "Computed from V_stall"),
+    ("CD0 (back-calc from fuel)",   round(CD0_at, 4),    "Computed from 78 GPH"),
+    ("k (induced drag)",             round(k_at, 4),     "AR + e=0.75"),
+    ("BSFC (kg/kWh)",                0.363,    "PT6A typical"),
+    ("Propeller efficiency",         0.80,     "Assumed"),
+    ("Power per engine (kW)",        1010,     "Air Tractor"),
+    ("Number of engines",            1,        "Air Tractor"),
+    ("Fuel capacity (kg)",           933,      "308 gal * 0.8"),
+    ("Cruise altitude (m)",           2438,     "8,000 ft"),
+]
+print_inputs("Pass-Through Inputs (NOT computed by the model)", at802_inputs)
+
+# ── Computed outputs ──
 at_params = AircraftParams(
-    wingspan=18.04,
-    CL_max=CL_max_at,
-    CL_cruise=CL_cruise_at,
-    CD0=CD0_at,
-    k=k_at,
-    MTOW=7257,
-    OEW=3062,
-    fuel_capacity=933,
-    propulsion_type="turboprop",
-    BSFC=BSFC_at,
-    eta_prop=eta_at,
-    power_per_engine=1010000,
-    num_engines=1,
-    wing_area=37.25,
-    altitude_cruise=2438,
-    altitude_field=0,
+    wingspan=18.04, CL_max=CL_max_at, CL_cruise=CL_cruise_at,
+    CD0=CD0_at, k=k_at, MTOW=7257, OEW=3062, fuel_capacity=933,
+    propulsion_type="turboprop", BSFC=BSFC_at, eta_prop=eta_at,
+    power_per_engine=1010000, num_engines=1, wing_area=37.25,
+    altitude_cruise=2438, altitude_field=0,
 )
 
 opt_at = optimal_speeds(at_params)
 
-# Run mission for per-segment fuel rates
+# Run mission
 mission_at = Mission()
 mission_at.add("taxi_out", duration_s=120)
 mission_at.add("takeoff", duration_s=60, altitude_m=0, climb_rate_mps=4.3)
@@ -199,51 +223,32 @@ mission_at.add("scoop", duration_s=300)
 mission_result_at = run_mission(at_params, mission_at)
 seg_rates = {s["segment"]: s["fuel_rate_kg_s"] for s in mission_result_at["segments"]}
 
-# Published AT-802 fuel data:
-#   Cruise: 78 GPH = 236 kg/h (PlanePhD, AT-802A, PT6A-65AG, 166 kt @ 8000ft)
-#   Patrol: 71 GPH = 215 kg/h (802u.com, AT-802U, 180 kt @ 10000ft)
-#   FuelBoss: 75 GPH = 227 kg/h (PT6A-67F variant)
-#   Takeoff: max power 1010 kW → BSFC * P = 0.363 * 1010 = 366.6 kg/h (theoretical)
-#   Taxi: 7% → 0.363 * 70.7 = 25.7 kg/h (theoretical)
-#   Landing: 5% → 0.363 * 50.5 = 18.3 kg/h (theoretical)
-
-# Compute fuel at published cruise speed (166 kt = 85.4 m/s) — should match 236 kg/h
-# (by construction since CD0 was back-calculated from it)
-cruise_computed_kgh = seg_rates.get("cruise", 0) * 3600
-
-# Compute fuel at patrol speed (180 kt = 92.6 m/s) — should be close to 215 kg/h
+# Compute fuel at patrol speed (180 kt) for comparison to 802u.com 71 GPH
 V_patrol = 180 * 0.514444
 q_patrol = 0.5 * rho_8000 * V_patrol**2
 CL_patrol = W_at / (q_patrol * 37.25)
 CD_patrol = CD0_at + k_at * CL_patrol**2
 D_patrol = q_patrol * 37.25 * CD_patrol
-patrol_computed_kgh = BSFC_at * D_patrol * V_patrol / (eta_at * 1000) * 3600
+patrol_ff = BSFC_at * D_patrol * V_patrol / (eta_at * 1000) * 3600  # kg/h
 
-# ── Performance metrics ──
-at802_perf_rows = [
-    ("MTOW (kg)",          at_params.MTOW,            7257,   ""),
-    ("OEW (kg)",           at_params.OEW,             3062,   ""),
-    ("Wingspan (m)",        at_params.wingspan,        18.04,  ""),
-    ("Wing area (m²)",     at_params.wing_area,       37.25,  ""),
-    ("Aspect ratio",       round(AR_at, 1),            8.8,    ""),
-    ("Stall speed (kt)",   V_stall_at * 1.94384,       79,     ""),
-    ("Best cruise (kt)",   opt_at["cruise_speed_kt"],  166,    ""),
-    ("Max L/D",            opt_at["max_LD"],           12.5,   ""),
-]
-print_table("AT-802F — Performance (Published: Air Tractor / PlanePhD)", at802_perf_rows)
+# Published takeoff fuel: max power → BSFC * P
+takeoff_pub_kgh = 0.363 * 1010  # 366.6 kg/h
 
-# ── Per-phase fuel burn rates ──
-at802_fuel_rows = [
-    ("Cruise @ 166 kt (kg/h)",  cruise_computed_kgh,             236.0,  ""),
-    ("Patrol @ 180 kt (kg/h)",  patrol_computed_kgh,              215.0,  ""),
-    ("FuelBoss avg (kg/h)",     cruise_computed_kgh,              227.0,  ""),
-    ("Taxi (kg/h)",             seg_rates.get("taxi_out",0)*3600,  25.7,  ""),
-    ("Takeoff (kg/h)",          seg_rates.get("takeoff",0)*3600,  366.6,  ""),
-    ("Loiter (kg/h)",           seg_rates.get("loiter",0)*3600,   165.0,  ""),
-    ("Landing (kg/h)",          seg_rates.get("landing",0)*3600,  18.3,  ""),
-    ("Scoop (kg/h)",            seg_rates.get("scoop",0)*3600,    110.0,  ""),
+at802_computed = [
+    ("Max L/D",                     opt_at["max_LD"],                        12.5,   ""),
+    ("Optimal cruise speed (kt)",   opt_at["cruise_speed_kt"],              166,    ""),
+    ("Cruise fuel @ 166 kt (kg/h)", seg_rates.get("cruise",0) * 3600,       236.0,  ""),
+    ("Patrol fuel @ 180 kt (kg/h)", patrol_ff,                              215.0,  ""),
+    ("Loiter fuel (kg/h)",          seg_rates.get("loiter",0) * 3600,       165.0,  ""),
+    ("Takeoff fuel (kg/h)",         seg_rates.get("takeoff",0) * 3600,     takeoff_pub_kgh, ""),
+    ("Taxi fuel (kg/h)",            seg_rates.get("taxi_out",0) * 3600,    25.7,   ""),
+    ("Landing fuel (kg/h)",         seg_rates.get("landing",0) * 3600,     18.3,   ""),
 ]
-print_table("AT-802F — Per-Phase Fuel Burn (Published: PlanePhD/802u/FuelBoss)", at802_fuel_rows)
+print_table("Computed Outputs vs Published (PlanePhD / 802u / FuelBoss)", at802_computed)
+
+print(f"\n  Note: CD0 was back-calculated from the published 78 GPH cruise")
+print(f"  fuel burn, so cruise fuel at 166 kt matches by construction.")
+print(f"  Patrol, loiter, takeoff, taxi, and landing are independent")
+print(f"  computations — those are the real validation numbers.")
 
 print(f"\n  Total mission fuel burn: {mission_result_at['total_fuel_kg']:.1f} kg")
-print(f"  Fuel remaining:          {at_params.fuel_capacity - mission_result_at['total_fuel_kg']:.1f} kg")
