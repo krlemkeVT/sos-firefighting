@@ -1,0 +1,294 @@
+{
+    "default_params_file": "baseline_pyrenees.json",
+    "agents": [
+        [
+            {
+                "file_name": "kingair200.json",
+                "agents_per_base": [
+                   1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+        [
+            {
+                "file_name": "cl515.json",
+                "agents_per_base": [
+                   1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "bell407.json",
+                "agents_per_base": [
+                    0,1
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+        [
+            {
+                "file_name": "v22-simulation-input.json",
+                "agents_per_base": [
+                   0,1
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+        [
+            {
+                "file_name": "bellV280-simulation-input.json",
+                "agents_per_base": [
+                   0,2
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+        [
+            {
+                "file_name": "xc142-simulation-input.json",
+                "agents_per_base": [
+                   0,1
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+        [
+            {
+                "file_name": "UH60BlackHawk-simulation-input.json",
+                "agents_per_base": [
+                   0,3
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+                [
+            {
+                "file_name": "AT802-simulation-input.json",
+                "agents_per_base": [
+                   5,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ],
+                [
+            {
+                "file_name": "S64skycrane-simulation-input.json",
+                "agents_per_base": [
+                   0,1
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,0
+                ],"suppression_tactic": {
+                "main": {
+                    "select_poi": "water"
+                },
+                "alternative": {
+                    "threshold": 100,
+                    "change_condition": "residential",
+                    "alternative_tactic": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+            }
+        ]
+        
+    ]
+}

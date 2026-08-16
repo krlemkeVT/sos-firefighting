@@ -1,0 +1,18 @@
+[project]
+name = "triton-optimization"
+version = "0.1.0"
+description = "Optimization and orchestration workflows for TRITON"
+requires-python = ">=3.10"
+dependencies = [
+    "triton-api",
+    "triton-runner",
+    "optuna",
+    "sqlalchemy",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

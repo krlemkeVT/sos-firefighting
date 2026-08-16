@@ -1,0 +1,34 @@
+# Python build/install artifacts
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Test/tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+.env/
+venv/
+
+# Local editor/OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated TRITON run artifacts
+runs/
+outputs/
+results/
+artifacts/

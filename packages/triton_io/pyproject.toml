@@ -1,0 +1,16 @@
+[project]
+name = "triton-io"
+version = "0.1.0"
+description = "Input/output adapters for TRITON workflows"
+requires-python = ">=3.10"
+dependencies = [
+    "triton-api",
+    "pandas",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

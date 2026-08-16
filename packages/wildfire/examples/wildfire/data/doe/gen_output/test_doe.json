@@ -1,0 +1,120 @@
+{
+    "0": {
+        "agents": [
+            {
+                "file_name": "example_aircraft_1.json",
+                "agents_per_base": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "water"
+                    }
+                }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "water"
+                    }
+                }
+            }
+        ]
+    },
+    "1": {
+        "agents": [
+            {
+                "file_name": "example_aircraft_1.json",
+                "agents_per_base": [
+                    2,
+                    1,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "indirect",
+                        "track_poi": "indirect",
+                        "suppress": "indirect"
+                    }
+                }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    2,
+                    1,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "indirect",
+                        "track_poi": "indirect",
+                        "suppress": "indirect"
+                    }
+                }
+            }
+        ]
+    },
+    "2": {
+        "agents": [
+            {
+                "file_name": "example_aircraft_1.json",
+                "agents_per_base": [
+                    2,
+                    2,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "indirect",
+                        "track_poi": "indirect",
+                        "suppress": "indirect"
+                    },
+                    "alternative": {
+                        "threshold": 50,
+                        "change_condition": "residential",
+                        "alternative_tactic": {
+                            "select_poi": "water"
+                        }
+                    }
+                }
+            },
+            {
+                "file_name": "dhc_515.json",
+                "agents_per_base": [
+                    2,
+                    2,
+                    1,
+                    1
+                ],
+                "suppression_tactic": {
+                    "main": {
+                        "select_poi": "indirect",
+                        "track_poi": "indirect",
+                        "suppress": "indirect"
+                    },
+                    "alternative": {
+                        "threshold": 50,
+                        "change_condition": "residential",
+                        "alternative_tactic": {
+                            "select_poi": "water"
+                        }
+                    }
+                }
+            }
+        ]
+    }
+}

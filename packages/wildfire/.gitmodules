@@ -1,0 +1,3 @@
+[submodule "examples/wildfire/aircraft_sizing/TiltRotorCode"]
+	path = examples/wildfire/aircraft_sizing/TiltRotorCode
+	url = git@github.com:krlemkeVT/TiltRotorCode.git
