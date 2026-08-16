@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aircraft_sizing"
+version = "0.1.0"
+description = "Aircraft sizing and performance models using OpenMDAO"
+requires-python = ">=3.9"
+dependencies = [
+    "openmdao>=3.30",
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
