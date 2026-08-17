@@ -10,7 +10,16 @@
 from typing import Union, Tuple
 
 import numpy as np
-from recordclass import dataobject
+# NOTE: recordclass.dataobject replaced with a plain base class
+# to avoid C-extension build issues on Windows.
+
+class dataobject:
+    """Lightweight replacement for recordclass.dataobject."""
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 LatLon = Union[tuple[float, float], np.ndarray]
 """ A 2D point on the Geographic (lat = Northward, lon = Eastward)

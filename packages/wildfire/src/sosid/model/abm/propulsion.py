@@ -19,7 +19,7 @@ from pydantic import (
     PositiveFloat,
     model_validator,
 )
-from recordclass import dataobject
+from sosid.typedef import dataobject
 from scipy.interpolate import make_interp_spline
 from typing_extensions import Self
 
