@@ -30,7 +30,7 @@ PRESETS = {
     "cl415": dict(
         wingspan=28.38, wing_area=100.0, cl_max=2.19, cl_cruise=0.43,
         cd0=0.0414, e=0.75, mtow=19890, oew=12880, fuel=4650,
-        psfc=0.286e-7, power=1775000, engines=2,
+        psfc=0.286/3.6e6, power=1775000, engines=2,
         propeller_diameter=3.97, propeller_blades=4,
         altitude=1500, propulsion="turboprop",
         icon="seaplane.svg", takeoff_landing_type="runway",
@@ -39,7 +39,7 @@ PRESETS = {
     "dhc515": dict(
         wingspan=28.6, wing_area=100.34, cl_max=2.19, cl_cruise=0.43,
         cd0=0.0414, e=0.75, mtow=20547, oew=12995, fuel=4626,
-        psfc=0.286e-7, power=1775000, engines=2,
+        psfc=0.286/3.6e6, power=1775000, engines=2,
         propeller_diameter=3.97, propeller_blades=4,
         altitude=3000, propulsion="turboprop",
         icon="seaplane.svg", takeoff_landing_type="runway",
@@ -48,7 +48,7 @@ PRESETS = {
     "at802f": dict(
         wingspan=18.04, wing_area=37.25, cl_max=1.89, cl_cruise=0.7,
         cd0=0.019, e=0.75, mtow=7257, oew=3062, fuel=933,
-        psfc=0.363e-7, power=1010000, engines=1,
+        psfc=0.363/3.6e6, power=1010000, engines=1,
         propeller_diameter=3.0, propeller_blades=5,
         altitude=2438, propulsion="turboprop",
         icon="seaplane.svg", takeoff_landing_type="runway",
@@ -57,7 +57,7 @@ PRESETS = {
     "c172": dict(
         wingspan=11.0, wing_area=16.5, cl_max=1.8, cl_cruise=0.4,
         cd0=0.028, e=0.7, mtow=1110, oew=770, fuel=144,
-        psfc=0.286e-7, power=120000, engines=1,
+        psfc=0.286/3.6e6, power=120000, engines=1,
         propeller_diameter=1.9, propeller_blades=2,
         altitude=2438, propulsion="turboprop",
         icon="plane.svg", takeoff_landing_type="runway",
