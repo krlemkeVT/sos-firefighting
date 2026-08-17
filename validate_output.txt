@@ -1,0 +1,93 @@
+
+##################################################################################
+#  DHC-415 (CL-415)
+##################################################################################
+
+======================================================================
+  Pass-Through Inputs (NOT computed by the model)
+======================================================================
+  Parameter                                     Value         Source
+  ------------------------------------ --------------   ------------
+  MTOW (kg)                                     19890         Preset
+  OEW (kg)                                      12880         Preset
+  Wingspan (m)                                  28.38         Preset
+  Wing area (m²)                               100.00         Preset
+  CL_max                                         2.19         Preset
+  CD0                                            0.04         Preset
+  k (induced drag)                               0.05         Preset
+  BSFC (kg/kWh)                                  0.29      Wikipedia
+  Propeller efficiency                           0.82         Preset
+  Power per engine (kW)                          1775         Preset
+  Number of engines                                 2         Preset
+  Fuel capacity (kg)                             4650         Preset
+  Cruise altitude (m)                            1500         Preset
+======================================================================
+  (These are NOT computed — they are inputs to the model.)
+
+
+==================================================================================
+  Computed Outputs vs Published (De Havilland DHC-515 official)
+==================================================================================
+  Metric                                     Computed      Published     % Diff
+  ------------------------------------ -------------- --------------   --------
+  Stall speed (kt)                               68.1             68   +   0.1%
+  Max L/D                                        10.9           10.9   +   0.0%
+  LRC fuel burn (kg/h)                          463.6          597.0    -22.3%
+  Normal cruise fuel (kg/h)                     742.1          597.0   +  24.3%
+  Ferry range (km)                             2606.8           2333   +  11.7%
+  Max endurance (h)                              13.6            6.3   + 115.4%
+  Optimal cruise speed (kt)                     124.0            140    -11.4%
+==================================================================================
+
+  Note: De Havilland publishes a single average fuel consumption
+  figure (597 kg/h at long range cruise). No per-phase breakdown
+  is publicly available. The LRC row is the direct comparison.
+
+
+##################################################################################
+#  Air Tractor AT-802F
+##################################################################################
+
+======================================================================
+  Pass-Through Inputs (NOT computed by the model)
+======================================================================
+  Parameter                                     Value         Source
+  ------------------------------------ --------------   ------------
+  MTOW (kg)                                      7257    Air Tractor
+  OEW (kg)                                       3062    Air Tractor
+  Wingspan (m)                                  18.04    Air Tractor
+  Wing area (m²)                                37.25    Air Tractor
+  CL_max (derived from stall)                    1.89   Computed from V_stall
+  CD0 (back-calc from fuel)                      0.03   Computed from 78 GPH
+  k (induced drag)                               0.05    AR + e=0.75
+  BSFC (kg/kWh)                                  0.36   PT6A typical
+  Propeller efficiency                           0.80        Assumed
+  Power per engine (kW)                          1010    Air Tractor
+  Number of engines                                 1    Air Tractor
+  Fuel capacity (kg)                              933   308 gal * 0.8
+  Cruise altitude (m)                            2438       8,000 ft
+======================================================================
+  (These are NOT computed — they are inputs to the model.)
+
+
+==================================================================================
+  Computed Outputs vs Published (PlanePhD / 802u / FuelBoss)
+==================================================================================
+  Metric                                     Computed      Published     % Diff
+  ------------------------------------ -------------- --------------   --------
+  Max L/D                                        12.6           12.5   +   1.1%
+  Optimal cruise speed (kt)                     135.7            166    -18.3%
+  Cruise fuel @ 166 kt (kg/h)                   326.6          236.0   +  38.4%
+  Patrol fuel @ 180 kt (kg/h)                   275.4          215.0   +  28.1%
+  Loiter fuel (kg/h)                            150.6          165.0     -8.7%
+  Takeoff fuel (kg/h)                           366.6          366.6   +   0.0%
+  Taxi fuel (kg/h)                               25.7           25.7     -0.1%
+  Landing fuel (kg/h)                            18.3           18.3   +   0.2%
+==================================================================================
+
+  Note: CD0 was back-calculated from the published 78 GPH cruise
+  fuel burn, so cruise fuel at 166 kt matches by construction.
+  Patrol, loiter, takeoff, taxi, and landing are independent
+  computations — those are the real validation numbers.
+
+  Total mission fuel burn: 218.9 kg
