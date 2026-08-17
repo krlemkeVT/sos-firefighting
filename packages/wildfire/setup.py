@@ -17,4 +17,4 @@ from setuptools import setup
 # __license__ = 'Apache 2.0'
 # __copyright__ = 'Copyright %s Project Mesa Team' % datetime.date.today().year
 if __name__ == "__main__":
-    setup(use_scm_version=True)
+    setup(version="0.1.0")
