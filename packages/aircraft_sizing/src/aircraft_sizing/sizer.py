@@ -1,22 +1,19 @@
-"""Aircraft sizer that bridges OpenMDAO performance to the TRITON sim.
+"""Aircraft sizer bridging OpenConcept performance to the TRITON sim.
 
 Takes DesignVariables (from triton_api), builds an AircraftParams, runs
-the OpenMDAO performance model, and outputs a SimulationInput-compatible
-dict that matches the wildfire simulation's aircraft JSON format
-(e.g. dhc_515.json).
+the OpenConcept/OpenMDAO performance model, and outputs a SimulationInput-
+compatible dict matching the wildfire simulation's aircraft JSON format.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict
 from typing import Any
 
 from aircraft_sizing.performance import (
     AircraftParams,
     Mission,
-    MissionSegment,
     run_mission,
     optimal_speeds,
     atmosphere,
@@ -25,29 +22,43 @@ from aircraft_sizing.performance import (
 
 # ──────────────────────────────────────────────
 # Presets — aircraft parameter sets
+# Uses Oswald efficiency e instead of k (k = 1/(pi*e*AR))
+# Uses psfc (kg/W/s) instead of bsfc (kg/kWh) — psfc = bsfc/3.6e6
 # ──────────────────────────────────────────────
 
 PRESETS = {
     "cl415": dict(
         wingspan=28.38, wing_area=100.0, cl_max=2.19, cl_cruise=0.43,
-        cd0=0.0414, k=0.0507, mtow=19890, oew=12880, fuel=4650,
-        bsfc=0.286 / 3600, eta_prop=0.82, power=1775000, engines=2,
+        cd0=0.0414, e=0.75, mtow=19890, oew=12880, fuel=4650,
+        psfc=0.286e-7, power=1775000, engines=2,
+        propeller_diameter=3.97, propeller_blades=4,
         altitude=1500, propulsion="turboprop",
         icon="seaplane.svg", takeoff_landing_type="runway",
         flow_rate=1.2, can_scoop=True, scooping_distance=410,
     ),
     "dhc515": dict(
-        wingspan=28.6, wing_area=100.0, cl_max=2.19, cl_cruise=0.43,
-        cd0=0.0414, k=0.0507, mtow=20547, oew=12217, fuel=2130,
-        bsfc=0.286 / 3600, eta_prop=0.82, power=1775000, engines=2,
+        wingspan=28.6, wing_area=100.34, cl_max=2.19, cl_cruise=0.43,
+        cd0=0.0414, e=0.75, mtow=20547, oew=12995, fuel=4626,
+        psfc=0.286e-7, power=1775000, engines=2,
+        propeller_diameter=3.97, propeller_blades=4,
         altitude=3000, propulsion="turboprop",
         icon="seaplane.svg", takeoff_landing_type="runway",
         flow_rate=1.2, can_scoop=True, scooping_distance=410,
     ),
+    "at802f": dict(
+        wingspan=18.04, wing_area=37.25, cl_max=1.89, cl_cruise=0.7,
+        cd0=0.019, e=0.75, mtow=7257, oew=3062, fuel=933,
+        psfc=0.363e-7, power=1010000, engines=1,
+        propeller_diameter=3.0, propeller_blades=5,
+        altitude=2438, propulsion="turboprop",
+        icon="seaplane.svg", takeoff_landing_type="runway",
+        flow_rate=1.2, can_scoop=False, scooping_distance=0,
+    ),
     "c172": dict(
-        wingspan=11.0, chord=1.5, cl_max=1.8, cl_cruise=0.4,
-        cd0=0.028, k=0.052, mtow=1110, oew=770, fuel=144,
-        bsfc=0.286 / 3600, eta_prop=0.80, power=120000, engines=1,
+        wingspan=11.0, wing_area=16.5, cl_max=1.8, cl_cruise=0.4,
+        cd0=0.028, e=0.7, mtow=1110, oew=770, fuel=144,
+        psfc=0.286e-7, power=120000, engines=1,
+        propeller_diameter=1.9, propeller_blades=2,
         altitude=2438, propulsion="turboprop",
         icon="plane.svg", takeoff_landing_type="runway",
         flow_rate=0.0, can_scoop=False, scooping_distance=0,
@@ -66,7 +77,7 @@ def build_firefighting_mission(
     cruise_duration: float = 1800.0,
     loiter_duration: float = 600.0,
 ) -> Mission:
-    """Build a firefighting mission profile matching the sim's expectations.
+    """Build a firefighting mission profile.
 
     Segments: taxi_out, takeoff, cruise_climb, cruise, cruise_descent,
     loiter, landing, scoop.
@@ -94,32 +105,20 @@ def build_firefighting_mission(
 # ──────────────────────────────────────────────
 
 class DefaultAircraftSizer:
-    """Aircraft sizer using OpenMDAO performance models.
+    """Aircraft sizer using OpenConcept performance models.
 
     Takes basic design variables, runs the performance analysis,
     and outputs a dict in the wildfire simulation's aircraft JSON format.
     """
 
     def __init__(self, preset: str | None = None):
-        """Initialize with an optional preset ('cl415', 'dhc515', 'c172')."""
+        """Initialize with an optional preset ('cl415', 'dhc515', 'at802f', 'c172')."""
         self.preset = preset
 
     def size(self, design: dict[str, float] | None = None) -> dict[str, Any]:
-        """Size the aircraft and return sim-compatible output.
-
-        Args:
-            design: Dict with keys like wing_area_m2, aspect_ratio,
-                    payload_kg, cruise_speed_mps, fuel_mass_kg.
-                    If None, uses preset defaults.
-
-        Returns:
-            Dict matching the wildfire sim aircraft JSON format
-            (icon, mtom, empty_mass, propulsion_input, profile_parameters, etc.)
-        """
-        # Start with preset or defaults
+        """Size the aircraft and return sim-compatible output."""
         cfg = PRESETS.get(self.preset, PRESETS["cl415"]).copy()
 
-        # Override with design variables if provided
         if design:
             if "wing_area_m2" in design:
                 cfg["wing_area"] = design["wing_area_m2"]
@@ -135,33 +134,30 @@ class DefaultAircraftSizer:
             if "max_takeoff_mass_kg" in design:
                 cfg["mtow"] = design["max_takeoff_mass_kg"]
 
-        # Build AircraftParams
         params = AircraftParams(
             wingspan=cfg["wingspan"],
-            chord=cfg.get("chord", cfg.get("wing_area", 100.0) / cfg["wingspan"]),
             CL_max=cfg["cl_max"],
             CL_cruise=cfg["cl_cruise"],
             CD0=cfg["cd0"],
-            k=cfg["k"],
+            e=cfg.get("e", 0.75),
             MTOW=cfg["mtow"],
             OEW=cfg["oew"],
             fuel_capacity=cfg["fuel"],
             propulsion_type=cfg.get("propulsion", "turboprop"),
-            BSFC=cfg.get("bsfc", 0.0),
-            eta_prop=cfg.get("eta_prop", 0.82),
-            power_per_engine=cfg.get("power", 0.0),
             num_engines=cfg.get("engines", 2),
+            power_per_engine=cfg.get("power", 1000000.0),
+            psfc=cfg.get("psfc", 0.286e-7),
+            propeller_diameter=cfg.get("propeller_diameter", 3.0),
+            propeller_blades=cfg.get("propeller_blades", 4),
             wing_area=cfg.get("wing_area"),
             altitude_cruise=cfg.get("altitude", 3000.0),
-            altitude_field=457.2,  # 1500 ft field elevation
+            altitude_field=457.2,
         )
 
-        # Compute optimal speeds
         opt = optimal_speeds(params)
         cruise_speed = cfg.get("cruise_speed", opt["cruise_speed_ms"])
         loiter_speed = opt["loiter_speed_ms"]
 
-        # Build and run mission
         mission = build_firefighting_mission(
             cruise_altitude=params.altitude_cruise,
             cruise_speed=cruise_speed,
@@ -169,7 +165,6 @@ class DefaultAircraftSizer:
         )
         results = run_mission(params, mission, verbose=False)
 
-        # Extract per-segment fuel rates for the sim format
         seg_rates = {}
         seg_durations = {}
         for seg in results["segments"]:
@@ -178,7 +173,6 @@ class DefaultAircraftSizer:
             seg_rates[fc_key] = round(seg["fuel_rate_kg_s"], 6)
             seg_durations[name] = seg["duration_s"]
 
-        # Build propulsion_input matching dhc_515.json format
         propulsion_input = {
             "architecture": "conventional",
             "total_propellant": round(cfg["fuel"], 1),
@@ -198,7 +192,6 @@ class DefaultAircraftSizer:
             "loiter_fc": seg_rates.get("loiter_fc", 0.232),
         }
 
-        # Build profile_parameters matching dhc_515.json format
         profile_parameters = {
             "taxi_out_duration": seg_durations.get("taxi_out", 120.0),
             "taxi_in_duration": 120.0,
@@ -219,7 +212,6 @@ class DefaultAircraftSizer:
             "loiter_speed": loiter_speed,
         }
 
-        # Build the full sim-compatible output
         sim_input = {
             "icon": cfg.get("icon", "seaplane.svg"),
             "takeoff_landing_type": cfg.get("takeoff_landing_type", "runway"),
@@ -235,7 +227,6 @@ class DefaultAircraftSizer:
             "profile_parameters": profile_parameters,
         }
 
-        # Attach performance metadata for debugging/optimization
         sim_input["_performance"] = {
             "total_fuel_kg": round(results["total_fuel_kg"], 1),
             "optimal_cruise_ms": round(opt["cruise_speed_ms"], 1),

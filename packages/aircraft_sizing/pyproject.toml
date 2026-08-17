@@ -9,6 +9,7 @@ description = "Aircraft sizing and performance models using OpenMDAO"
 requires-python = ">=3.9"
 dependencies = [
     "openmdao>=3.30",
+    "openconcept>=1.2",
     "numpy>=1.20",
     "scipy>=1.7",
     "pydantic>=2.0",
