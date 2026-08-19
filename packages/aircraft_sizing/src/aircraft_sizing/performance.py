@@ -13,6 +13,21 @@ raw OpenMDAO ExecComps. This provides:
 
 OpenConcept is built on OpenMDAO and provides gradient-ready aircraft
 components with analytic derivatives.
+
+
+# Have open concept not do sizing whcih is why endurance is an issue.
+give it a mission that has the ferry range as a mission and back calculate the fuel burn and the reserve
+construct that profile and then back 
+ferry range typical assumption is the velocity for best range. VBR
+find pilot's manual and compare to that
+matching velocity to specs, sizing comes later when not comparing to the other aircraft...
+calibration is tuning the guessed inputs to match to the known aircraft performance as closely as possible
+this is the baseline that we trust using openconcept to get the performance of DHC 415 
+VBR VBE Stall Service Ceiling
+Once you have that then play with mission
+only sizing the mission to optimize for the one airplane. 
+How you use the only mission engineering to optimize for each scenario
+
 """
 
 import openmdao.api as om

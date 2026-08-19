@@ -34,7 +34,7 @@ def generate_aircraft():
     print("  Step 1: Generate aircraft with OpenMDAO sizer")
     print("=" * 60)
 
-    sizer = DefaultAircraftSizer(preset="cl415")
+    sizer = DefaultAircraftSizer(preset="c172")
     result = sizer.size()
 
     # Save to the wildfire aircraft data directory
@@ -95,12 +95,12 @@ def build_request(aircraft_file: str) -> ScenarioRunRequest:
             ),
             AircraftFleetEntry(
                 file_name=aircraft_file,
-                agents_per_base=[0, 2],
+                agents_per_base=[0, 0],
                 suppression_tactic=tactic,
             ),
         ],
         scenario_modifiers={},
-        seeds=[0],
+        seeds=[1],
         fleet_acq_eur=80_000_000.0,
         metadata={
             "note": "OpenMDAO-sized CL-415 + reference DHC-515, Palisades scenario",
