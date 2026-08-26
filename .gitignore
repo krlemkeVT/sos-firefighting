@@ -18,6 +18,10 @@ __pycache__/
 
 # Virtual environments
 .venv/
+
+# OpenMDAO output directories
+*_out/
+__main___out/
 .env/
 venv/
 
