@@ -7,13 +7,14 @@ wildfire simulation.
 """
 
 from aircraft_sizing.sizer import DefaultAircraftSizer
-from aircraft_sizing.spec_model import SpecAircraftModel, PerformanceSpec
+from aircraft_sizing.spec_model import SpecAircraftModel, ConfigSpec, PerformanceSpec
 from aircraft_sizing.performance import AircraftParams, Mission, MissionSegment
 from aircraft_sizing.performance import run_mission, optimal_speeds, atmosphere
 
 __all__ = [
     "DefaultAircraftSizer",
     "SpecAircraftModel",
+    "ConfigSpec",
     "PerformanceSpec",
     "AircraftParams",
     "Mission",

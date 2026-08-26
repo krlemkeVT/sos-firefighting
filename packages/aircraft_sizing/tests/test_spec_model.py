@@ -1,84 +1,115 @@
-"""Tests for the spec-based aircraft model (SpecAircraftModel)."""
+"""Tests for the spec-based aircraft performance model (SpecAircraftModel).
+
+Tests that ConfigSpec inputs → computed PerformanceSpec outputs, and that
+the computed values are in reasonable ranges for known aircraft.
+"""
 
 import pytest
-from aircraft_sizing import SpecAircraftModel, PerformanceSpec
+from aircraft_sizing import SpecAircraftModel, ConfigSpec, PerformanceSpec
 
 
-def test_cl415_spec_preset():
-    """CL-415 spec preset should produce sim-compatible output with direct values."""
+def test_cl415_compute():
+    """CL-415 config should produce reasonable performance numbers."""
     model = SpecAircraftModel(preset="cl415")
-    result = model.model()
+    perf = model.compute()
 
-    assert result["mtom"] == pytest.approx(19890, rel=0.01)
-    assert result["empty_mass"] == pytest.approx(12880, rel=0.01)
-    assert result["span"] == pytest.approx(28.38, rel=0.01)
-    assert result["can_scoop"] is True
-    assert result["propulsion_input"]["total_propellant"] > 0
-    assert result["propulsion_input"]["cruise_fc"] > 0
-    assert result["propulsion_input"]["takeoff_fc"] > 0
-    assert result["profile_parameters"]["cruise_speed"] > 50
-    # No _performance key — that's sizing-only
-    assert "_performance" not in result
+    assert isinstance(perf, PerformanceSpec)
+    # Stall speed: CL-415 published ~68 kt
+    assert perf.stall_speed_kt > 50
+    assert perf.stall_speed_kt < 90
+    # Max L/D: published ~10.9
+    assert perf.max_LD > 8
+    assert perf.max_LD < 15
+    # Optimal cruise: should be > 50 m/s
+    assert perf.optimal_cruise_ms > 50
+    # Loiter should be slower than cruise (turboprop)
+    assert perf.optimal_loiter_ms < perf.optimal_cruise_ms
+    # Fuel rates should be positive
+    assert perf.cruise_fc > 0
+    assert perf.loiter_fc > 0
+    assert perf.takeoff_fc > 0
+    # Ferry range should be positive
+    assert perf.ferry_range_km > 100
 
 
-def test_at802f_spec_preset():
-    """AT-802F spec preset should produce correct values."""
+def test_at802f_compute():
+    """AT-802F config should produce reasonable performance numbers."""
     model = SpecAircraftModel(preset="at802f")
-    result = model.model()
+    perf = model.compute()
 
-    assert result["mtom"] == pytest.approx(7257, rel=0.01)
-    assert result["can_scoop"] is False
-    assert result["propulsion_input"]["total_propellant"] > 0
+    # Stall speed: AT-802 published ~79 kt
+    assert perf.stall_speed_kt > 60
+    assert perf.stall_speed_kt < 100
+    # Max L/D: estimated ~12.5
+    assert perf.max_LD > 9
+    assert perf.max_LD < 20
+    # Fuel rates positive
+    assert perf.cruise_fc > 0
+    assert perf.takeoff_fc > 0
 
 
-def test_spec_from_dataclass():
-    """Should work with a PerformanceSpec dataclass directly."""
-    spec = PerformanceSpec(
-        mtom=10000, empty_mass=5000, payload=2000, span=15.0,
-        total_propellant=1000, reserve_propellant=150,
-        cruise_fc=0.1, takeoff_fc=0.2, loiter_fc=0.05,
-        cruise_speed=70.0, loiter_speed=50.0,
+def test_config_from_dataclass():
+    """Should work with a ConfigSpec dataclass directly."""
+    cfg = ConfigSpec(
+        wingspan=20.0, wing_area=50.0, cl_max=2.0, cl_cruise=0.5,
+        cd0=0.03, e=0.75, mtow=10000, oew=5000, fuel_capacity=2000,
+        num_engines=1, power_per_engine=500000,
     )
     model = SpecAircraftModel()
-    result = model.model(spec)
+    perf = model.compute(cfg)
 
-    assert result["mtom"] == pytest.approx(10000, rel=0.01)
-    assert result["empty_mass"] == pytest.approx(5000, rel=0.01)
-    assert result["payload"] == pytest.approx(2000, rel=0.01)
-    assert result["propulsion_input"]["cruise_fc"] == pytest.approx(0.1, abs=1e-6)
-    assert result["propulsion_input"]["takeoff_fc"] == pytest.approx(0.2, abs=1e-6)
-    assert result["profile_parameters"]["cruise_speed"] == 70.0
+    assert perf.stall_speed_ms > 0
+    assert perf.max_LD > 0
+    assert perf.cruise_fc > 0
 
 
-def test_spec_dict_override():
-    """Dict overrides should merge with preset defaults."""
+def test_config_dict_override():
+    """Dict overrides should merge with preset config."""
     model = SpecAircraftModel(preset="cl415")
-    base = model.model()
-    modified = model.model({"payload": 3000.0, "cruise_speed": 90.0})
+    base = model.compute()
+    modified = model.compute({"mtow": 15000.0})
 
-    assert modified["payload"] == pytest.approx(3000, rel=0.01)
-    assert modified["profile_parameters"]["cruise_speed"] == 90.0
-    # Other values should remain from preset
-    assert modified["mtom"] == base["mtom"]
+    # Lighter aircraft should have lower stall speed
+    assert modified.stall_speed_ms < base.stall_speed_ms
 
 
-def test_spec_to_json():
-    """to_json should produce valid JSON string."""
+def test_compare():
+    """compare() should return computed values and comparison rows."""
     model = SpecAircraftModel(preset="cl415")
+    result = model.compare()
+
+    assert result["preset"] == "cl415"
+    assert "performance" in result
+    assert "comparison" in result
+    assert len(result["comparison"]) > 0
+
+    # Each comparison row should have the right fields
+    for row in result["comparison"]:
+        assert "metric" in row
+        assert "computed" in row
+        assert "published" in row
+        assert "pct_diff" in row
+
+
+def test_to_json():
+    """to_json should produce valid JSON with performance values."""
     import json
+    model = SpecAircraftModel(preset="cl415")
     j = model.to_json()
     parsed = json.loads(j)
-    assert parsed["mtom"] == pytest.approx(19890, rel=0.01)
-    assert "propulsion_input" in parsed
-    assert "profile_parameters" in parsed
+    assert "stall_speed_ms" in parsed
+    assert "max_LD" in parsed
+    assert "cruise_fc" in parsed
 
 
-def test_spec_no_sizing_artifacts():
-    """Spec model should not contain any sizing/optimization artifacts."""
-    model = SpecAircraftModel(preset="cl415")
-    result = model.model()
+def test_c172_compute():
+    """Cessna 172 config should produce reasonable numbers."""
+    model = SpecAircraftModel(preset="c172")
+    perf = model.compute()
 
-    # These keys exist in the sizer output but should NOT exist in spec output
-    assert "_performance" not in result
-    assert "optimal_cruise_ms" not in result
-    assert "max_LD" not in result
+    # C172 stall ~40 kt
+    assert perf.stall_speed_kt > 25
+    assert perf.stall_speed_kt < 55
+    # Light aircraft — fuel rates should be small
+    assert perf.cruise_fc > 0
+    assert perf.cruise_fc < 0.01  # kg/s, very small for a 172

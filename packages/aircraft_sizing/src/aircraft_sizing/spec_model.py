@@ -1,13 +1,15 @@
-"""Spec-based aircraft performance model — no sizing, no mission.
+"""Spec-based aircraft performance model — config in, performance out.
 
-Takes performance specs directly as inputs (fuel rates, speeds, weights,
-profile parameters) and outputs the SimulationInput-compatible dict that
-the TRITON wildfire simulation expects.
+Takes configuration and dimension specs (wingspan, wing area, CD0, Oswald
+efficiency, MTOW, power, PSFC, etc.) as inputs, computes performance via
+OpenConcept/OpenMDAO (stall speed, optimal cruise/loiter speeds, max L/D,
+per-segment fuel burn rates), and outputs a PerformanceSpec with the
+computed values — plus a comparison against published reference data.
 
-Unlike the sizer (which computes fuel burn from aerodynamic parameters via
-OpenConcept/OpenMDAO mission analysis), this model is a straight pass-through:
-what you put in is what you get out. Use it when you already have measured or
-published performance data and just need it in the sim's JSON format.
+Unlike the sizer (which runs a full mission profile to compute fuel burn),
+this model computes performance metrics directly from the aero model and
+packages them. Use it when you want to validate the OpenConcept performance
+output against known/published aircraft performance data.
 
 Branch: feature/performance-spec-model
 """
@@ -19,230 +21,459 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from aircraft_sizing.performance import (
+    AircraftParams,
+    optimal_speeds,
+    atmosphere,
+    run_mission,
+    Mission,
+)
+
+
+G = 9.80665
+
 
 # ──────────────────────────────────────────────
-# Performance spec dataclass
+# Configuration spec dataclass (INPUTS)
+# ──────────────────────────────────────────────
+
+@dataclass
+class ConfigSpec:
+    """Aircraft configuration and dimension specifications — inputs to the model.
+
+    These are the physical/engineering parameters that define the aircraft.
+    The model uses these to compute performance via OpenConcept/OpenMDAO.
+    """
+
+    # ── Geometry ──
+    wingspan: float = 28.38              # m
+    wing_area: float = 100.0             # m²
+    cl_max: float = 2.19               # max lift coefficient
+    cl_cruise: float = 0.43            # cruise lift coefficient
+    cd0: float = 0.0414                # zero-lift drag coefficient
+    e: float = 0.75                    # Oswald efficiency factor
+
+    # ── Mass ──
+    mtow: float = 19890                  # max takeoff weight (kg)
+    oew: float = 12880                   # operating empty weight (kg)
+    fuel_capacity: float = 4650         # fuel capacity (kg)
+
+    # ── Propulsion ──
+    propulsion_type: str = "turboprop"
+    num_engines: int = 2
+    power_per_engine: float = 1775000    # W
+    psfc: float = 0.286 / 3.6e6          # kg/W/s (0.286 kg/kWh → kg/W/s)
+    propeller_diameter: float = 3.97     # m
+    propeller_blades: int = 4
+    eta_prop: float = 0.82              # propeller efficiency
+
+    # ── Operating conditions ──
+    altitude_cruise: float = 3000.0      # m
+    altitude_field: float = 457.2        # m (1,500 ft)
+
+    # ── Firefighting config (pass-through) ──
+    flow_rate: float = 1.2              # water drop flow rate
+    can_scoop: bool = True
+    scooping_distance: float = 410       # m
+    icon: str = "seaplane.svg"
+    takeoff_landing_type: str = "runway"
+    refueling_rate: float = 7.7         # kg/s
+    reserve_fraction: float = 0.15      # reserve fuel as fraction of total
+
+    @property
+    def AR(self) -> float:
+        """Aspect ratio."""
+        return self.wingspan ** 2 / self.wing_area
+
+    @property
+    def k(self) -> float:
+        """Induced drag coefficient: k = 1/(pi * e * AR)."""
+        return 1.0 / (math.pi * self.e * self.AR)
+
+    def to_aircraft_params(self) -> AircraftParams:
+        """Convert to AircraftParams for OpenConcept computation."""
+        return AircraftParams(
+            wingspan=self.wingspan,
+            CL_max=self.cl_max,
+            CL_cruise=self.cl_cruise,
+            CD0=self.cd0,
+            e=self.e,
+            MTOW=self.mtow,
+            OEW=self.oew,
+            fuel_capacity=self.fuel_capacity,
+            propulsion_type=self.propulsion_type,
+            num_engines=self.num_engines,
+            power_per_engine=self.power_per_engine,
+            psfc=self.psfc,
+            propeller_diameter=self.propeller_diameter,
+            propeller_blades=self.propeller_blades,
+            wing_area=self.wing_area,
+            altitude_cruise=self.altitude_cruise,
+            altitude_field=self.altitude_field,
+        )
+
+
+# ──────────────────────────────────────────────
+# Performance spec dataclass (OUTPUTS)
 # ──────────────────────────────────────────────
 
 @dataclass
 class PerformanceSpec:
-    """Direct performance specifications — no computation, just inputs.
+    """Computed performance specifications — outputs from OpenConcept.
 
-    All values are provided directly; the model packages them into the
-    wildfire simulation's aircraft JSON format without running any
-    aerodynamic or mission analysis.
+    All values are computed from ConfigSpec inputs via OpenConcept/OpenMDAO
+    or analytical formulas. These are the performance numbers the wildfire
+    simulation needs.
     """
 
-    # ── Mass & geometry ──
-    mtom: float                          # max takeoff mass (kg)
-    empty_mass: float                    # operating empty mass (kg)
-    payload: float = 0.0                # payload (kg)
-    span: float = 0.0                   # wingspan (m)
+    # ── Computed speeds ──
+    stall_speed_ms: float = 0.0          # stall speed (m/s)
+    stall_speed_kt: float = 0.0          # stall speed (kt)
+    optimal_cruise_ms: float = 0.0       # optimal cruise speed (m/s)
+    optimal_cruise_kt: float = 0.0       # optimal cruise speed (kt)
+    optimal_loiter_ms: float = 0.0       # optimal loiter speed (m/s)
+    optimal_loiter_kt: float = 0.0       # optimal loiter speed (kt)
 
-    # ── Firefighting specs ──
-    flow_rate: float = 0.0              # water drop flow rate (L/s or m³/s)
-    can_scoop: bool = False             # can scoop water from lakes?
-    scooping_distance: float = 0.0     # distance needed to scoop (m)
+    # ── Computed aerodynamics ──
+    max_LD: float = 0.0                  # max lift-to-drag ratio
+    cruise_LD: float = 0.0              # cruise L/D
+    loiter_LD: float = 0.0             # loiter L/D
+    cruise_cl: float = 0.0             # cruise lift coefficient
+    loiter_cl: float = 0.0            # loiter lift coefficient
+    cruise_mach: float = 0.0          # cruise Mach number
 
-    # ── Sim metadata ──
-    icon: str = "seaplane.svg"
-    takeoff_landing_type: str = "runway"  # "runway" or "vertical"
-    autonomous: bool = False
+    # ── Computed fuel rates (kg/s) ──
+    cruise_fc: float = 0.0             # cruise fuel consumption rate
+    loiter_fc: float = 0.0             # loiter fuel consumption rate
+    takeoff_fc: float = 0.0            # takeoff fuel consumption rate
+    taxi_out_fc: float = 0.0           # taxi out fuel consumption rate
+    taxi_in_fc: float = 0.0           # taxi in fuel consumption rate
+    landing_fc: float = 0.0           # landing fuel consumption rate
+    cruise_climb_fc: float = 0.0      # cruise climb fuel consumption rate
+    cruise_descent_fc: float = 0.0   # cruise descent fuel consumption rate
+    scoop_fc: float = 0.0            # scoop fuel consumption rate
 
-    # ── Propulsion: fuel & rates ──
-    total_propellant: float = 0.0       # total fuel capacity (kg)
-    reserve_propellant: float = 0.0     # reserve fuel (kg)
-    refueling_rate: float = 7.7        # refueling rate (kg/s)
+    # ── Computed range/endurance ──
+    ferry_range_km: float = 0.0         # ferry range at optimal cruise (km)
+    max_endurance_h: float = 0.0        # max endurance at loiter (h)
 
-    # Per-segment fuel consumption rates (kg/s)
-    # If a segment rate is not provided, defaults to 0.0
-    taxi_out_fc: float = 0.0
-    taxi_in_fc: float = 0.0
-    takeoff_fc: float = 0.0
-    transition_fc: float = 0.0
-    retransition_fc: float = 0.0
-    cruise_fc: float = 0.0
-    cruise_climb_fc: float = 0.0
-    cruise_descent_fc: float = 0.0
-    landing_fc: float = 0.0
-    loiter_fc: float = 0.0
-
-    # ── Mission profile parameters ──
-    taxi_out_duration: float = 120.0
-    taxi_in_duration: float = 120.0
-    transition_duration: float = 0.0
-    retransition_duration: float = 0.0
-
-    takeoff_altitude: float = 457.2     # m (1,500 ft)
-    takeoff_climb_rate: float = 3.78    # m/s
-    takeoff_ground_speed: float = 18.25 # m/s
-
-    cruise_altitude: float = 3000.0     # m
-    cruise_speed: float = 80.0          # m/s
-    cruise_climb_rate: float = 8.85     # m/s
-    cruise_climb_ground_speed: float = 84.55  # m/s
-    cruise_descent_rate: float = 8.85   # m/s
-    cruise_descent_ground_speed: float = 84.55  # m/s
-
-    landing_altitude: float = 457.2     # m
-    landing_descent_rate: float = 5.0   # m/s
-    landing_ground_speed: float = 18.25 # m/s
-
-    loiter_speed: float = 60.0          # m/s
+    # ── Fuel ──
+    total_fuel_kg: float = 0.0          # total fuel for mission (kg)
+    fuel_remaining_kg: float = 0.0      # fuel remaining after mission (kg)
 
 
 # ──────────────────────────────────────────────
-# Spec presets — known aircraft with published performance
+# Published reference data for comparison
 # ──────────────────────────────────────────────
 
-SPECS = {
+PUBLISHED = {
+    "cl415": {
+        "stall_speed_kt": 68,
+        "max_LD": 10.9,
+        "lrc_fuel_kg_h": 597,
+        "normal_cruise_fuel_kg_h": 597,  # DH publishes single average
+        "ferry_range_km": 2333,
+        "max_endurance_h": 6.3,
+        "optimal_cruise_kt": 140,
+        # Per-segment fuel rates from validate_aircraft.py (kg/s)
+        "cruise_fc": 0.226,
+        "loiter_fc": 0.232,
+        "takeoff_fc": 0.495,
+        "taxi_out_fc": 0.091,
+        "landing_fc": 0.016,
+        # Sources
+        "_sources": {
+            "stall_speed_kt": "De Havilland DHC-515 official",
+            "max_LD": "Published glide ratio",
+            "lrc_fuel_kg_h": "De Havilland (avg at LRC)",
+            "ferry_range_km": "De Havilland (4,626 kg fuel)",
+            "max_endurance_h": "Derived from loiter fuel burn",
+            "optimal_cruise_kt": "De Havilland LRC 140 kt",
+        },
+    },
+    "dhc515": {
+        "stall_speed_kt": 68,
+        "max_LD": 10.9,
+        "lrc_fuel_kg_h": 597,
+        "normal_cruise_fuel_kg_h": 597,
+        "ferry_range_km": 2333,
+        "max_endurance_h": 6.3,
+        "optimal_cruise_kt": 140,
+        "_sources": {
+            "stall_speed_kt": "De Havilland DHC-515 official",
+            "max_LD": "Published glide ratio",
+            "lrc_fuel_kg_h": "De Havilland (avg at LRC)",
+        },
+    },
+    "at802f": {
+        "stall_speed_kt": 79,
+        "max_LD": 12.5,
+        "cruise_fuel_kg_h": 236,         # PlanePhD: 78 GPH at 166 kt
+        "patrol_fuel_kg_h": 215,         # 802u.com: 71 GPH at 180 kt
+        "optimal_cruise_kt": 166,
+        "cruise_fc": 0.066,
+        "loiter_fc": 0.046,
+        "takeoff_fc": 0.101,
+        "taxi_out_fc": 0.007,
+        "landing_fc": 0.005,
+        "_sources": {
+            "stall_speed_kt": "Air Tractor / 802u.com",
+            "max_LD": "Estimated",
+            "cruise_fuel_kg_h": "PlanePhD: 78 GPH at 166 kt, 8000 ft",
+            "patrol_fuel_kg_h": "802u.com: 71 GPH at 180 kt",
+        },
+    },
+    "c172": {
+        "stall_speed_kt": 40,
+        "max_LD": 11.0,
+        "optimal_cruise_kt": 122,
+        "_sources": {
+            "stall_speed_kt": "Cessna POH",
+            "max_LD": "Cessna POH glide ratio",
+            "optimal_cruise_kt": "Cessna POH",
+        },
+    },
+}
+
+
+# ──────────────────────────────────────────────
+# Config presets — aircraft dimension/config inputs
+# ──────────────────────────────────────────────
+
+CONFIGS = {
     "cl415": dict(
-        mtom=19890, empty_mass=12880, payload=6200, span=28.38,
+        wingspan=28.38, wing_area=100.0, cl_max=2.19, cl_cruise=0.43,
+        cd0=0.0414, e=0.75, mtow=19890, oew=12880, fuel_capacity=4650,
+        propulsion_type="turboprop", num_engines=2, power_per_engine=1775000,
+        psfc=0.286 / 3.6e6, propeller_diameter=3.97, propeller_blades=4,
+        eta_prop=0.82, altitude_cruise=1500, altitude_field=457.2,
         flow_rate=1.2, can_scoop=True, scooping_distance=410,
         icon="seaplane.svg", takeoff_landing_type="runway",
-        total_propellant=4650, reserve_propellant=697.5, refueling_rate=7.7,
-        taxi_out_fc=0.091, taxi_in_fc=0.091,
-        takeoff_fc=0.495,
-        cruise_fc=0.226, cruise_climb_fc=0.41, cruise_descent_fc=0.052,
-        landing_fc=0.016, loiter_fc=0.232,
-        cruise_altitude=1500, cruise_speed=72.2, loiter_speed=55.0,
-        takeoff_altitude=457.2, landing_altitude=457.2,
+        refueling_rate=7.7, reserve_fraction=0.15,
     ),
     "dhc515": dict(
-        mtom=20547, empty_mass=12995, payload=7000, span=28.6,
+        wingspan=28.6, wing_area=100.34, cl_max=2.19, cl_cruise=0.43,
+        cd0=0.0414, e=0.75, mtow=20547, oew=12995, fuel_capacity=4626,
+        propulsion_type="turboprop", num_engines=2, power_per_engine=1775000,
+        psfc=0.286 / 3.6e6, propeller_diameter=3.97, propeller_blades=4,
+        eta_prop=0.82, altitude_cruise=3000, altitude_field=457.2,
         flow_rate=1.2, can_scoop=True, scooping_distance=410,
         icon="seaplane.svg", takeoff_landing_type="runway",
-        total_propellant=4626, reserve_propellant=693.9, refueling_rate=7.7,
-        taxi_out_fc=0.091, taxi_in_fc=0.091,
-        takeoff_fc=0.495,
-        cruise_fc=0.226, cruise_climb_fc=0.41, cruise_descent_fc=0.052,
-        landing_fc=0.016, loiter_fc=0.232,
-        cruise_altitude=3000, cruise_speed=72.2, loiter_speed=55.0,
-        takeoff_altitude=457.2, landing_altitude=457.2,
+        refueling_rate=7.7, reserve_fraction=0.15,
     ),
     "at802f": dict(
-        mtom=7257, empty_mass=3062, payload=3000, span=18.04,
+        wingspan=18.04, wing_area=37.25, cl_max=1.89, cl_cruise=0.70,
+        cd0=0.019, e=0.75, mtow=7257, oew=3062, fuel_capacity=933,
+        propulsion_type="turboprop", num_engines=1, power_per_engine=1010000,
+        psfc=0.363 / 3.6e6, propeller_diameter=3.0, propeller_blades=5,
+        eta_prop=0.80, altitude_cruise=2438, altitude_field=457.2,
         flow_rate=1.2, can_scoop=False, scooping_distance=0,
         icon="seaplane.svg", takeoff_landing_type="runway",
-        total_propellant=933, reserve_propellant=140.0, refueling_rate=7.7,
-        taxi_out_fc=0.007, taxi_in_fc=0.007,
-        takeoff_fc=0.101,
-        cruise_fc=0.066, cruise_climb_fc=0.066, cruise_descent_fc=0.022,
-        landing_fc=0.005, loiter_fc=0.046,
-        cruise_altitude=2438, cruise_speed=85.4, loiter_speed=65.0,
-        takeoff_altitude=457.2, landing_altitude=457.2,
+        refueling_rate=7.7, reserve_fraction=0.15,
     ),
     "c172": dict(
-        mtom=1110, empty_mass=770, payload=180, span=11.0,
+        wingspan=11.0, wing_area=16.5, cl_max=1.8, cl_cruise=0.40,
+        cd0=0.028, e=0.70, mtow=1110, oew=770, fuel_capacity=144,
+        propulsion_type="turboprop", num_engines=1, power_per_engine=120000,
+        psfc=0.286 / 3.6e6, propeller_diameter=1.9, propeller_blades=2,
+        eta_prop=0.80, altitude_cruise=2438, altitude_field=457.2,
         flow_rate=0.0, can_scoop=False, scooping_distance=0,
         icon="plane.svg", takeoff_landing_type="runway",
-        total_propellant=144, reserve_propellant=21.6, refueling_rate=0.5,
-        taxi_out_fc=0.0016, taxi_in_fc=0.0016,
-        takeoff_fc=0.0089,
-        cruise_fc=0.007, cruise_climb_fc=0.007, cruise_descent_fc=0.003,
-        landing_fc=0.001, loiter_fc=0.006,
-        cruise_altitude=2438, cruise_speed=62.0, loiter_speed=50.0,
-        takeoff_altitude=457.2, landing_altitude=457.2,
+        refueling_rate=0.5, reserve_fraction=0.15,
     ),
 }
 
 
 # ──────────────────────────────────────────────
-# Spec-based model
+# Spec-based model: config → performance
 # ──────────────────────────────────────────────
 
 class SpecAircraftModel:
-    """Spec-based aircraft model — direct pass-through, no sizing.
+    """Spec-based aircraft performance model — config in, performance out.
 
-    Takes a PerformanceSpec (or a preset name) and outputs the dict
-    expected by the wildfire simulation. No OpenMDAO, no mission
-    analysis, no aerodynamic computation — just packaging.
+    Takes a ConfigSpec (wingspan, wing area, CD0, e, MTOW, power, PSFC, etc.)
+    and computes performance via OpenConcept/OpenMDAO: stall speed, optimal
+    cruise/loiter speeds, max L/D, per-segment fuel burn rates, ferry range,
+    and max endurance.
+
+    Optionally compares computed performance against published reference data.
     """
 
     def __init__(self, preset: str | None = None):
         """Initialize with an optional preset ('cl415', 'dhc515', 'at802f', 'c172')."""
         self.preset = preset
 
-    def model(self, spec: PerformanceSpec | dict[str, Any] | None = None) -> dict[str, Any]:
-        """Build the sim-compatible output from a performance spec.
-
-        Args:
-            spec: A PerformanceSpec dataclass, a dict of spec values, or
-                  None to use the preset defaults.
-
-        Returns:
-            Dict matching the wildfire sim aircraft JSON format.
-        """
-        if spec is None:
-            preset_name = self.preset or "cl415"
-            cfg = SPECS.get(preset_name, SPECS["cl415"]).copy()
-        elif isinstance(spec, PerformanceSpec):
-            cfg = spec.__dict__.copy()
-        elif isinstance(spec, dict):
-            base = SPECS.get(self.preset or "cl415", SPECS["cl415"]).copy()
-            base.update(spec)
+    def _build_config(self, config: ConfigSpec | dict[str, Any] | None) -> ConfigSpec:
+        """Build a ConfigSpec from a dataclass, dict, or preset name."""
+        if config is None:
+            name = self.preset or "cl415"
+            cfg = CONFIGS.get(name, CONFIGS["cl415"])
+        elif isinstance(config, ConfigSpec):
+            return config
+        elif isinstance(config, dict):
+            base = CONFIGS.get(self.preset or "cl415", CONFIGS["cl415"]).copy()
+            base.update(config)
             cfg = base
         else:
-            raise TypeError(f"Expected PerformanceSpec or dict, got {type(spec)}")
+            raise TypeError(f"Expected ConfigSpec or dict, got {type(config)}")
 
-        s = PerformanceSpec(**{k: v for k, v in cfg.items() if k in PerformanceSpec.__dataclass_fields__})
+        valid_fields = ConfigSpec.__dataclass_fields__
+        return ConfigSpec(**{k: v for k, v in cfg.items() if k in valid_fields})
 
-        propulsion_input = {
-            "architecture": "conventional",
-            "total_propellant": round(s.total_propellant, 1),
-            "reserve_propellant": round(s.reserve_propellant, 1),
-            "propellant_unit": "kg",
-            "refueling_rate": s.refueling_rate,
-            "taxi_out_fc": round(s.taxi_out_fc, 6),
-            "taxi_in_fc": round(s.taxi_in_fc, 6),
-            "takeoff_fc": round(s.takeoff_fc, 6),
-            "transition_fc": round(s.transition_fc, 6),
-            "retransition_fc": round(s.retransition_fc, 6),
-            "cruise_fc": round(s.cruise_fc, 6),
-            "cruise_climb_fc": round(s.cruise_climb_fc, 6),
-            "cruise_descent_fc": round(s.cruise_descent_fc, 6),
-            "landing_fc": round(s.landing_fc, 6),
-            "loiter_fc": round(s.loiter_fc, 6),
+    def compute(self, config: ConfigSpec | dict[str, Any] | None = None) -> PerformanceSpec:
+        """Compute performance from configuration specs.
+
+        Args:
+            config: ConfigSpec dataclass, dict of config values, or None for preset.
+
+        Returns:
+            PerformanceSpec with computed performance values.
+        """
+        cfg = self._build_config(config)
+        params = cfg.to_aircraft_params()
+        atm = atmosphere(params.altitude_cruise)
+        rho = atm["rho"]
+        a = atm["a"]
+        W = params.MTOW * G
+        S = params.wing_area
+        k = 1 / (math.pi * params.e * params.AR)
+
+        # ── Stall speed ──
+        rho_field = atmosphere(params.altitude_field)["rho"]
+        V_stall = math.sqrt(2 * W / (rho_field * S * params.CL_max))
+
+        # ── Optimal speeds (analytical) ──
+        opt = optimal_speeds(params)
+
+        # ── Per-segment fuel rates ──
+        # Run mission to get fuel rates for each phase
+        mission = self._build_mission(
+            cruise_altitude=params.altitude_cruise,
+            cruise_speed=opt["cruise_speed_ms"],
+            loiter_speed=opt["loiter_speed_ms"],
+            altitude_field=params.altitude_field,
+        )
+        results = run_mission(params, mission, verbose=False)
+
+        seg_rates = {}
+        for seg in results["segments"]:
+            seg_rates[seg["segment"]] = seg["fuel_rate_kg_s"]
+
+        # ── Ferry range and endurance ──
+        cruise_fuel_rate = seg_rates.get("cruise", 0.0)
+        loiter_fuel_rate = seg_rates.get("loiter", 0.0)
+
+        if cruise_fuel_rate > 0:
+            ferry_range_km = (cfg.fuel_capacity / cruise_fuel_rate) * opt["cruise_speed_ms"] / 1000
+        else:
+            ferry_range_km = 0.0
+
+        if loiter_fuel_rate > 0:
+            max_endurance_h = (cfg.fuel_capacity / loiter_fuel_rate) / 3600
+        else:
+            max_endurance_h = 0.0
+
+        return PerformanceSpec(
+            # Speeds
+            stall_speed_ms=V_stall,
+            stall_speed_kt=V_stall * 1.94384,
+            optimal_cruise_ms=opt["cruise_speed_ms"],
+            optimal_cruise_kt=opt["cruise_speed_kt"],
+            optimal_loiter_ms=opt["loiter_speed_ms"],
+            optimal_loiter_kt=opt["loiter_speed_kt"],
+            # Aerodynamics
+            max_LD=opt["max_LD"],
+            cruise_LD=opt["cruise_LD"],
+            loiter_LD=opt["loiter_LD"],
+            cruise_cl=opt["cruise_CL"],
+            loiter_cl=opt["loiter_CL"],
+            cruise_mach=opt["cruise_mach"],
+            # Fuel rates (kg/s)
+            cruise_fc=seg_rates.get("cruise", 0.0),
+            loiter_fc=seg_rates.get("loiter", 0.0),
+            takeoff_fc=seg_rates.get("takeoff", 0.0),
+            taxi_out_fc=seg_rates.get("taxi_out", 0.0),
+            taxi_in_fc=seg_rates.get("taxi_out", 0.0),
+            landing_fc=seg_rates.get("landing", 0.0),
+            cruise_climb_fc=seg_rates.get("cruise_climb", seg_rates.get("cruise", 0.0)),
+            cruise_descent_fc=seg_rates.get("cruise_descent", 0.0),
+            scoop_fc=seg_rates.get("scoop", 0.0),
+            # Range/endurance
+            ferry_range_km=ferry_range_km,
+            max_endurance_h=max_endurance_h,
+            # Fuel
+            total_fuel_kg=results["total_fuel_kg"],
+            fuel_remaining_kg=results["fuel_remaining_kg"],
+        )
+
+    def _build_mission(self, cruise_altitude: float = 3000.0,
+                       cruise_speed: float | None = None,
+                       loiter_speed: float | None = None,
+                       altitude_field: float = 457.2) -> Mission:
+        """Build a standard firefighting mission for fuel rate computation."""
+        mission = Mission()
+        mission.add("taxi_out", duration_s=120.0)
+        mission.add("takeoff", duration_s=60.0, altitude_m=altitude_field,
+                    climb_rate_mps=3.78)
+        mission.add("cruise_climb", duration_s=120.0, altitude_m=cruise_altitude,
+                    climb_rate_mps=8.85)
+        mission.add("cruise", duration_s=1800.0,
+                    altitude_m=cruise_altitude, speed_mps=cruise_speed)
+        mission.add("cruise_descent", duration_s=120.0,
+                    climb_rate_mps=-8.85)
+        mission.add("loiter", duration_s=600.0,
+                    speed_mps=loiter_speed)
+        mission.add("landing", duration_s=60.0, altitude_m=altitude_field,
+                    climb_rate_mps=-5.0)
+        mission.add("scoop", duration_s=300.0)
+        return mission
+
+    def compare(self, config: ConfigSpec | dict[str, Any] | None = None,
+                preset: str | None = None) -> dict[str, Any]:
+        """Compute performance and compare against published reference data.
+
+        Args:
+            config: ConfigSpec or dict. If None, uses the preset.
+            preset: Preset name for published data lookup. Defaults to self.preset.
+
+        Returns:
+            Dict with computed PerformanceSpec values and comparison to published.
+        """
+        perf = self.compute(config)
+        preset_name = preset or self.preset or "cl415"
+        published = PUBLISHED.get(preset_name, {})
+
+        computed_vals = perf.__dict__.copy()
+        comparisons = []
+        for key, pub_val in published.items():
+            if key.startswith("_"):
+                continue
+            comp_val = computed_vals.get(key, None)
+            if comp_val is not None and pub_val != 0:
+                pct = ((comp_val - pub_val) / pub_val) * 100
+                comparisons.append({
+                    "metric": key,
+                    "computed": round(comp_val, 4),
+                    "published": pub_val,
+                    "pct_diff": round(pct, 1),
+                    "source": published.get("_sources", {}).get(key, ""),
+                })
+            elif comp_val is not None and pub_val == 0:
+                comparisons.append({
+                    "metric": key,
+                    "computed": round(comp_val, 4),
+                    "published": pub_val,
+                    "pct_diff": None,
+                    "source": published.get("_sources", {}).get(key, ""),
+                })
+
+        return {
+            "preset": preset_name,
+            "performance": perf.__dict__,
+            "comparison": comparisons,
         }
 
-        profile_parameters = {
-            "taxi_out_duration": s.taxi_out_duration,
-            "taxi_in_duration": s.taxi_in_duration,
-            "transition_duration": s.transition_duration,
-            "retransition_duration": s.retransition_duration,
-            "takeoff_altitude": s.takeoff_altitude,
-            "takeoff_climb_rate": s.takeoff_climb_rate,
-            "takeoff_ground_speed": s.takeoff_ground_speed,
-            "cruise_altitude": s.cruise_altitude,
-            "cruise_speed": s.cruise_speed,
-            "cruise_climb_rate": s.cruise_climb_rate,
-            "cruise_climb_ground_speed": s.cruise_climb_ground_speed,
-            "cruise_descent_rate": s.cruise_descent_rate,
-            "cruise_descent_ground_speed": s.cruise_descent_ground_speed,
-            "landing_altitude": s.landing_altitude,
-            "landing_descent_rate": s.landing_descent_rate,
-            "landing_ground_speed": s.landing_ground_speed,
-            "loiter_speed": s.loiter_speed,
-        }
-
-        sim_input = {
-            "icon": s.icon,
-            "takeoff_landing_type": s.takeoff_landing_type,
-            "autonomous": s.autonomous,
-            "mtom": round(s.mtom, 1),
-            "empty_mass": round(s.empty_mass, 1),
-            "payload": round(s.payload, 1),
-            "flow_rate": s.flow_rate,
-            "can_scoop": s.can_scoop,
-            "scooping_distance": s.scooping_distance,
-            "span": round(s.span, 2),
-            "propulsion_input": propulsion_input,
-            "profile_parameters": profile_parameters,
-        }
-
-        return sim_input
-
-    def to_json(self, spec: PerformanceSpec | dict[str, Any] | None = None,
+    def to_json(self, config: ConfigSpec | dict[str, Any] | None = None,
                 indent: int = 2) -> str:
-        """Build the sim output and return as a JSON string."""
-        return json.dumps(self.model(spec), indent=indent)
+        """Compute performance and return as JSON string."""
+        return json.dumps(self.compute(config).__dict__, indent=indent)
