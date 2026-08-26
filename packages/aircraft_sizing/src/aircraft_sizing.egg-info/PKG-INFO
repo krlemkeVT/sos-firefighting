@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: aircraft_sizing
+Version: 0.1.0
+Summary: Aircraft sizing and performance models using OpenMDAO
+Requires-Python: >=3.9
+Requires-Dist: openmdao>=3.30
+Requires-Dist: numpy>=1.20
+Requires-Dist: scipy>=1.7
+Requires-Dist: pydantic>=2.0
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"

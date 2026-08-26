@@ -1,0 +1,10 @@
+pyproject.toml
+src/aircraft_sizing/__init__.py
+src/aircraft_sizing/performance.py
+src/aircraft_sizing/sizer.py
+src/aircraft_sizing.egg-info/PKG-INFO
+src/aircraft_sizing.egg-info/SOURCES.txt
+src/aircraft_sizing.egg-info/dependency_links.txt
+src/aircraft_sizing.egg-info/requires.txt
+src/aircraft_sizing.egg-info/top_level.txt
+tests/test_sizer.py

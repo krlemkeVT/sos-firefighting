@@ -1,0 +1,25 @@
+{
+  "run_id": "openmdao_palisades",
+  "scenario_name": "Palisades",
+  "input_file": "Palisades.json",
+  "baseline_overwrites_file": "baseline_palisades.json",
+  "fleet_acq_eur": 80000000.0,
+  "seeds": [
+    1
+  ],
+  "metadata": {
+    "note": "OpenMDAO-sized CL-415 + reference DHC-515, Palisades scenario"
+  },
+  "per_seed": [
+    {
+      "seed": 1,
+      "output_dir": "runs\\openmdao_palisades\\Palisades\\seed_1\\outputs",
+      "feasible": false,
+      "error": "Seed 1 failed for scenario Palisades: Wildfire subprocess failed for seed 1 with return code 1."
+    }
+  ],
+  "mean_moe": null,
+  "errors": [
+    "Seed 1 failed for scenario Palisades: Wildfire subprocess failed for seed 1 with return code 1."
+  ]
+}

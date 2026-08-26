@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: triton-io
+Version: 0.1.0
+Summary: Input/output adapters for TRITON workflows
+Requires-Python: >=3.10
+Requires-Dist: triton-api
+Requires-Dist: pandas
