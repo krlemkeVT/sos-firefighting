@@ -18,19 +18,82 @@ from __future__ import annotations
 
 import json
 import math
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Any
+
+import openmdao.api as om
+from openconcept.mission import BasicMission
 
 from aircraft_sizing.performance import (
     AircraftParams,
     optimal_speeds,
     atmosphere,
-    run_mission,
-    Mission,
 )
 
 
 G = 9.80665
+
+
+# ──────────────────────────────────────────────
+# OpenConcept turboprop aircraft component
+# ──────────────────────────────────────────────
+
+def _make_turboprop_ac(num_engines: int, psfc: float):
+    """Create an OpenConcept-compliant turboprop aircraft component class.
+
+    The class uses a parabolic drag polar (CD0 + CL^2/(pi*e*AR)) and a
+    PSFC-based fuel flow model (fuel = psfc * throttle * power * num_engines).
+    Propeller efficiency varies with airspeed.
+    """
+    _ne = num_engines
+    _psfc = psfc
+
+    class TurbopropAC(om.ExplicitComponent):
+        def initialize(self):
+            self.options.declare("num_nodes", default=1)
+            self.options.declare("flight_phase", default=None)
+
+        def setup(self):
+            nn = self.options["num_nodes"]
+            self.add_input("fltcond|CL", shape=(nn,))
+            self.add_input("throttle", shape=(nn,))
+            self.add_input("fltcond|q", shape=(nn,), units="Pa")
+            self.add_input("fltcond|rho", shape=(nn,), units="kg/m**3")
+            self.add_input("fltcond|Utrue", shape=(nn,), units="m/s")
+            self.add_input("ac|geom|wing|S_ref", shape=1, units="m**2")
+            self.add_input("ac|geom|wing|AR", shape=1)
+            self.add_input("ac|weights|MTOW", shape=1, units="kg")
+            self.add_input("CD0", shape=1)
+            self.add_input("e", shape=1)
+            self.add_input("ac|propulsion|engine|rating", shape=1, units="W")
+            self.add_input("ac|propulsion|propeller|diameter", shape=1, units="m")
+            self.add_output("weight", shape=(nn,), units="kg")
+            self.add_output("drag", shape=(nn,), units="N")
+            self.add_output("thrust", shape=(nn,), units="N")
+            self.add_output("fuel_flow", shape=(nn,), units="kg/s")
+            self.declare_partials(["*"], ["*"], method="cs")
+
+        def compute(self, inputs, outputs):
+            nn = self.options["num_nodes"]
+            CL = inputs["fltcond|CL"]
+            q = inputs["fltcond|q"]
+            S = inputs["ac|geom|wing|S_ref"][0]
+            AR = inputs["ac|geom|wing|AR"][0]
+            CD0 = inputs["CD0"][0]
+            e_val = inputs["e"][0]
+            CD = CD0 + CL**2 / (np.pi * e_val * AR)
+            outputs["drag"] = q * S * CD
+            outputs["weight"] = np.full(nn, inputs["ac|weights|MTOW"][0])
+            throttle = inputs["throttle"]
+            shaft_power = throttle * inputs["ac|propulsion|engine|rating"][0] * _ne
+            V = inputs["fltcond|Utrue"]
+            eta_prop = 0.82 * np.minimum(1.0, V / 50.0 + 0.3)
+            V_safe = np.maximum(V, 1.0)
+            outputs["thrust"] = shaft_power * eta_prop / V_safe
+            outputs["fuel_flow"] = _psfc * shaft_power
+
+    return TurbopropAC
 
 
 # ──────────────────────────────────────────────
@@ -321,7 +384,16 @@ class SpecAircraftModel:
         return ConfigSpec(**{k: v for k, v in cfg.items() if k in valid_fields})
 
     def compute(self, config: ConfigSpec | dict[str, Any] | None = None) -> PerformanceSpec:
-        """Compute performance from configuration specs.
+        """Compute performance from configuration specs via OpenConcept.
+
+        Uses OpenConcept's BasicMission (climb, cruise, descent) to compute
+        per-phase fuel flow, drag, thrust, CL, and true airspeed through
+        OpenMDAO's atmospheric model and steady-flight solver. Stall speed,
+        optimal speeds, and max L/D use analytical formulas (standard
+        aerodynamic relationships that OpenConcept doesn't expose directly).
+
+        Power-setting phases (taxi, takeoff, landing, scoop) use the same
+        PSFC × power_fraction model as the analytical path.
 
         Args:
             config: ConfigSpec dataclass, dict of config values, or None for preset.
@@ -332,44 +404,70 @@ class SpecAircraftModel:
         cfg = self._build_config(config)
         params = cfg.to_aircraft_params()
         atm = atmosphere(params.altitude_cruise)
-        rho = atm["rho"]
-        a = atm["a"]
         W = params.MTOW * G
         S = params.wing_area
-        k = 1 / (math.pi * params.e * params.AR)
 
-        # ── Stall speed ──
+        # ── Stall speed (analytical) ──
         rho_field = atmosphere(params.altitude_field)["rho"]
         V_stall = math.sqrt(2 * W / (rho_field * S * params.CL_max))
 
-        # ── Optimal speeds (analytical) ──
+        # ── Optimal speeds and max L/D (analytical) ──
         opt = optimal_speeds(params)
 
-        # ── Per-segment fuel rates ──
-        # Run mission to get fuel rates for each phase
-        mission = self._build_mission(
-            cruise_altitude=params.altitude_cruise,
-            cruise_speed=opt["cruise_speed_ms"],
-            loiter_speed=opt["loiter_speed_ms"],
-            altitude_field=params.altitude_field,
-        )
-        results = run_mission(params, mission, verbose=False)
+        # ── OpenConcept BasicMission (climb, cruise, descent) ──
+        oc_results = self._run_openconcept(cfg, params)
 
-        seg_rates = {}
-        for seg in results["segments"]:
-            seg_rates[seg["segment"]] = seg["fuel_rate_kg_s"]
+        # Extract per-phase data from OpenConcept
+        oc_phases = {}
+        for phase in ["climb", "cruise", "descent"]:
+            oc_phases[phase] = {
+                "fuel_flow": oc_results[phase]["fuel_flow"],
+                "drag": oc_results[phase]["drag"],
+                "thrust": oc_results[phase]["thrust"],
+                "duration": oc_results[phase]["duration"],
+                "Utrue": oc_results[phase]["Utrue"],
+                "CL": oc_results[phase]["CL"],
+                "fuel_burn": oc_results[phase]["fuel_burn"],
+            }
+
+        # ── Power-setting phases (PSFC × power_fraction) ──
+        # These are the same formulas used in the analytical model
+        power_total = params.num_engines * params.power_per_engine
+
+        taxi_rate = params.psfc * power_total * 0.07
+        takeoff_rate = params.psfc * power_total * 1.0
+        landing_rate = params.psfc * power_total * 0.05
+        scoop_rate = params.psfc * power_total * 0.30
+
+        # ── Cruise and loiter fuel rates from OpenConcept ──
+        cruise_rate = oc_phases["cruise"]["fuel_flow"]
+        cruise_climb_rate = oc_phases["climb"]["fuel_flow"]
+        cruise_descent_rate = oc_phases["descent"]["fuel_flow"]
+
+        # Loiter: use the analytical loiter speed at cruise altitude
+        # (OpenConcept BasicMission doesn't have a loiter phase)
+        loiter_rate = self._compute_loiter_fuel(cfg, params, opt["loiter_speed_ms"])
+
+        # ── Total fuel from OpenConcept mission ──
+        oc_total_fuel = sum(p["fuel_burn"] for p in oc_phases.values())
+
+        # Add power-setting phase fuel
+        ps_fuel = (
+            taxi_rate * 120 +       # taxi_out
+            takeoff_rate * 60 +    # takeoff
+            landing_rate * 60 +    # landing
+            scoop_rate * 300        # scoop
+        )
+        total_fuel = oc_total_fuel + ps_fuel + loiter_rate * 600
 
         # ── Ferry range and endurance ──
-        cruise_fuel_rate = seg_rates.get("cruise", 0.0)
-        loiter_fuel_rate = seg_rates.get("loiter", 0.0)
-
-        if cruise_fuel_rate > 0:
-            ferry_range_km = (cfg.fuel_capacity / cruise_fuel_rate) * opt["cruise_speed_ms"] / 1000
+        if cruise_rate > 0:
+            ferry_range_km = (cfg.fuel_capacity / cruise_rate) * opt["cruise_speed_ms"] / 1000
         else:
             ferry_range_km = 0.0
 
-        if loiter_fuel_rate > 0:
-            max_endurance_h = (cfg.fuel_capacity / loiter_fuel_rate) / 3600
+        if loiter_rate > 0:
+            max_endurance_h = (cfg.fuel_capacity / loiter_rate) / 3600
         else:
             max_endurance_h = 0.0
 
@@ -388,45 +486,105 @@ class SpecAircraftModel:
             cruise_cl=opt["cruise_CL"],
             loiter_cl=opt["loiter_CL"],
             cruise_mach=opt["cruise_mach"],
-            # Fuel rates (kg/s)
-            cruise_fc=seg_rates.get("cruise", 0.0),
-            loiter_fc=seg_rates.get("loiter", 0.0),
-            takeoff_fc=seg_rates.get("takeoff", 0.0),
-            taxi_out_fc=seg_rates.get("taxi_out", 0.0),
-            taxi_in_fc=seg_rates.get("taxi_out", 0.0),
-            landing_fc=seg_rates.get("landing", 0.0),
-            cruise_climb_fc=seg_rates.get("cruise_climb", seg_rates.get("cruise", 0.0)),
-            cruise_descent_fc=seg_rates.get("cruise_descent", 0.0),
-            scoop_fc=seg_rates.get("scoop", 0.0),
+            # Fuel rates (kg/s) — cruise/climb/descent from OpenConcept
+            cruise_fc=cruise_rate,
+            loiter_fc=loiter_rate,
+            takeoff_fc=takeoff_rate,
+            taxi_out_fc=taxi_rate,
+            taxi_in_fc=taxi_rate,
+            landing_fc=landing_rate,
+            cruise_climb_fc=cruise_climb_rate,
+            cruise_descent_fc=cruise_descent_rate,
+            scoop_fc=scoop_rate,
             # Range/endurance
             ferry_range_km=ferry_range_km,
             max_endurance_h=max_endurance_h,
             # Fuel
-            total_fuel_kg=results["total_fuel_kg"],
-            fuel_remaining_kg=results["fuel_remaining_kg"],
+            total_fuel_kg=total_fuel,
+            fuel_remaining_kg=cfg.fuel_capacity - total_fuel,
         )
 
-    def _build_mission(self, cruise_altitude: float = 3000.0,
-                       cruise_speed: float | None = None,
-                       loiter_speed: float | None = None,
-                       altitude_field: float = 457.2) -> Mission:
-        """Build a standard firefighting mission for fuel rate computation."""
-        mission = Mission()
-        mission.add("taxi_out", duration_s=120.0)
-        mission.add("takeoff", duration_s=60.0, altitude_m=altitude_field,
-                    climb_rate_mps=3.78)
-        mission.add("cruise_climb", duration_s=120.0, altitude_m=cruise_altitude,
-                    climb_rate_mps=8.85)
-        mission.add("cruise", duration_s=1800.0,
-                    altitude_m=cruise_altitude, speed_mps=cruise_speed)
-        mission.add("cruise_descent", duration_s=120.0,
-                    climb_rate_mps=-8.85)
-        mission.add("loiter", duration_s=600.0,
-                    speed_mps=loiter_speed)
-        mission.add("landing", duration_s=60.0, altitude_m=altitude_field,
-                    climb_rate_mps=-5.0)
-        mission.add("scoop", duration_s=300.0)
-        return mission
+    def _run_openconcept(self, cfg: ConfigSpec, params: AircraftParams) -> dict:
+        """Run OpenConcept BasicMission and extract per-phase results.
+
+        Returns dict with climb/cruise/descent keys, each containing:
+        fuel_flow (kg/s), drag (N), thrust (N), duration (s),
+        Utrue (m/s), CL, fuel_burn (kg).
+        """
+        nn = 5
+        ACClass = _make_turboprop_ac(cfg.num_engines, cfg.psfc)
+
+        prob = om.Problem()
+        prob.model.add_subsystem(
+            "mission",
+            BasicMission(aircraft_model=ACClass, num_nodes=nn),
+            promotes_inputs=["*"],
+        )
+
+        # Aircraft parameters
+        ivc = prob.model.add_subsystem("acparams", om.IndepVarComp(), promotes=["*"])
+        ivc.add_output("ac|geom|wing|S_ref", val=cfg.wing_area, units="m**2")
+        ivc.add_output("ac|geom|wing|AR", val=cfg.AR)
+        ivc.add_output("ac|weights|MTOW", val=cfg.mtow, units="kg")
+        ivc.add_output("ac|aero|CL_max_flaps30", val=cfg.cl_max)
+        ivc.add_output("CD0", val=cfg.cd0)
+        ivc.add_output("e", val=cfg.e)
+        ivc.add_output("ac|propulsion|engine|rating", val=cfg.power_per_engine, units="W")
+        ivc.add_output("ac|propulsion|propeller|diameter", val=cfg.propeller_diameter, units="m")
+
+        # Mission parameters
+        ivc2 = prob.model.add_subsystem("missionparams", om.IndepVarComp(), promotes=["*"])
+        ivc2.add_output("takeoff|h", val=cfg.altitude_field * 3.28084, units="ft")
+        ivc2.add_output("cruise|h0", val=cfg.altitude_cruise * 3.28084, units="ft")
+        ivc2.add_output("mission_range", val=100.0, units="NM")
+        ivc2.add_output("payload", val=(cfg.mtow - cfg.oew - cfg.fuel_capacity) * 2.20462, units="lbm")
+
+        prob.setup()
+
+        # Set equivalent airspeeds for each phase
+        prob.set_val("mission.climb.atmos.trueair.fltcond|Ueas", np.full(nn, 150.0), units="kn")
+        prob.set_val("mission.cruise.atmos.trueair.fltcond|Ueas", np.full(nn, 180.0), units="kn")
+        prob.set_val("mission.descent.atmos.trueair.fltcond|Ueas", np.full(nn, 150.0), units="kn")
+
+        prob.run_model()
+
+        results = {}
+        for phase in ["climb", "cruise", "descent"]:
+            ff = prob.get_val(f"mission.{phase}.acmodel.fuel_flow", units="kg/s")
+            dur = prob.get_val(f"mission.{phase}.ode_integ_phase.duration", units="s")
+            drag = prob.get_val(f"mission.{phase}.acmodel.drag", units="N")
+            thrust = prob.get_val(f"mission.{phase}.acmodel.thrust", units="N")
+            Utrue = prob.get_val(f"mission.{phase}.fltcond|Utrue", units="m/s")
+            CL = prob.get_val(f"mission.{phase}.fltcond|CL")
+            results[phase] = {
+                "fuel_flow": float(np.mean(ff)),
+                "duration": float(dur[0]),
+                "drag": float(np.mean(drag)),
+                "thrust": float(np.mean(thrust)),
+                "Utrue": float(np.mean(Utrue)),
+                "CL": float(np.mean(CL)),
+                "fuel_burn": float(np.mean(ff) * dur[0]),
+            }
+        return results
+
+    def _compute_loiter_fuel(self, cfg: ConfigSpec, params: AircraftParams,
+                             loiter_speed: float) -> float:
+        """Compute loiter fuel rate at loiter speed and cruise altitude.
+
+        Uses the same drag polar as the OpenConcept component: CD = CD0 + CL^2/(pi*e*AR).
+        Fuel = psfc * drag * V / eta_prop.
+        """
+        atm = atmosphere(params.altitude_cruise)
+        rho = atm["rho"]
+        W = params.MTOW * G
+        k = 1 / (math.pi * params.e * params.AR)
+        V = loiter_speed
+        q = 0.5 * rho * V**2
+        CL = W / (q * params.wing_area)
+        CD = params.CD0 + k * CL**2
+        drag = q * params.wing_area * CD
+        power = drag * V / cfg.eta_prop
+        return params.psfc * power
 
     def compare(self, config: ConfigSpec | dict[str, Any] | None = None,
                 preset: str | None = None) -> dict[str, Any]:
